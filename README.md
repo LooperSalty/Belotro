@@ -6,7 +6,15 @@ Le tout tient dans **un seul fichier HTML autonome** — aucune dépendance de b
 
 ## ▶️ Jouer
 
-Ouvre simplement `index.html` dans un navigateur, ou joue en ligne sur le déploiement Vercel.
+**En ligne : https://belotro.vercel.app** 🎮
+
+Ou en local : ouvre simplement `index.html` dans un navigateur.
+
+### Multijoueur entre amis (gratuit)
+1. Mode **« En ligne »** → entre un pseudo → **Créer un salon**
+2. Partage le **code à 4 lettres** à tes potes
+3. Chacun choisit « En ligne » → entre le code → **Rejoindre**
+4. L'hôte clique **Démarrer** (les sièges vides sont tenus par l'IA)
 
 ## 🎮 Modes
 
