@@ -4,19 +4,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Vue d'ensemble
 
-**BELOTRO** est un jeu de **belote coinchée** habillé d'une boucle **roguelike** inspirée de _Balatro_. Tout le jeu tient dans **un unique fichier autonome** : `Belotro.html` (HTML + CSS + JS vanilla, ~1900 lignes). **Aucun build, aucune dépendance npm, aucun asset externe** hormis les polices Google Fonts. Le son est synthétisé à la volée (Web Audio API).
+**BELOTRO** est un jeu de **belote coinchée** habillé d'une boucle **roguelike** inspirée de _Balatro_. Tout le jeu tient dans **un unique fichier autonome** : `index.html` (HTML + CSS + JS vanilla, ~1900 lignes). **Aucun build, aucune dépendance npm, aucun asset externe** hormis les polices Google Fonts. Le son est synthétisé à la volée (Web Audio API).
 
-Pour travailler : ouvrir `Belotro.html` dans un navigateur. Il n'existe ni package.json, ni test runner, ni lint — les modifications se font directement dans le fichier.
+Pour travailler : ouvrir `index.html` dans un navigateur. Il n'existe ni package.json, ni test runner, ni lint — les modifications se font directement dans le fichier.
 
 ## Lancer / tester
 
-- **Jouer** : ouvrir `Belotro.html` (double-clic) OU le servir en HTTP (le navigateur peut refuser `file://` pour certaines API). Ex. serveur statique : `node -e "require('http').createServer((q,r)=>require('fs').createReadStream('Belotro.html').pipe(r)).listen(4599)"` puis http://localhost:4599.
+- **Jouer** : ouvrir `index.html` (double-clic) OU le servir en HTTP (le navigateur peut refuser `file://` pour certaines API). Ex. serveur statique : `node -e "require('http').createServer((q,r)=>require('fs').createReadStream('index.html').pipe(r)).listen(4599)"` puis http://localhost:4599.
 - **Vérifier la syntaxe JS** sans navigateur : extraire le contenu de `<script>` et le passer à `new Function(code)` sous Node (`node -e "..."`).
 - **Tester le moteur de façon déterministe** : dans la console du navigateur, rediriger `window.setTimeout` vers une file pompée manuellement (contourne à la fois l'asynchronisme des temporisations ET le throttling des onglets d'arrière-plan), puis piloter les points de décision humains (passer les enchères, jouer `legalMoves(seat)[0]`, cliquer les boutons d'overlay). Invariant clé à vérifier en phase `play` : `Σ hands[i].length + trickIndex*4 + trick.cardsPlayed.length === 32` (détecte toute fuite de carte).
 
 > ⚠️ **Piège de test** : dans un onglet Chrome en arrière-plan (`document.visibilityState === 'hidden'`), `setTimeout`/`setInterval` sont bridés (~1s minimum) et coalescés. Piloter le jeu avec un `setInterval` externe qui court après les chaînes de `setTimeout` du moteur provoque des **races** (mains incohérentes) qui n'existent PAS en jeu réel. Préférer le pilotage synchrone décrit ci-dessus.
 
-## Architecture du fichier `Belotro.html`
+## Architecture du fichier `index.html`
 
 Trois sections : `<style>` (thème + animations), le markup (`#menu`, `#table`, `#overlayRoot`), puis un gros `<script>`.
 
@@ -72,5 +72,5 @@ Chaque joker est un `id` dans `S.jokers` ; son effet est codé en dur à l'endro
 ## Déploiement & multijoueur
 
 - **GitHub** : dépôt public `LooperSalty/Belotro` (remote `origin` en SSH).
-- **Vercel** : hébergement statique. `vercel.json` réécrit `/` → `/Belotro.html`. Déploiement par intégration Git (push sur `origin`) ou `vercel deploy` (nécessite `vercel login`).
+- **Vercel** : hébergement statique. Le jeu est `index.html` à la racine (servi automatiquement à `/`, aucun `vercel.json` requis). Déploiement par **intégration Git** (push sur `origin` → redéploiement auto) ou `vercel deploy`. URL de prod : `belotro.vercel.app`.
 - **Multijoueur en ligne** (mode « En ligne », gratuit) : implémenté via **Supabase Realtime** (broadcast + presence), salons par code, modèle **host-authoritative** (l'hôte fait tourner le moteur et diffuse des vues expurgées ; les invités sont des terminaux qui renvoient leurs intentions `bid`/`pass`/`coinche`/`play`). Code dans le bloc `MULTIJOUEUR EN LIGNE` : `NET`/`GV` (état réseau), `joinChannel`/`onPresence`/`showLobby` (salon), `netView`/`netBroadcastSync` (hôte), `applyGuestView`/`renderGuestHand` (invité), `onHostAction` (application des intentions). Les fonctions moteur branchent le type de siège `'human'` (local) / `'remote'` (invité) / `'ai'` via `S.awaiting`. La couche roguelike (blindes/boutique/jokers) reste **solo** ; en ligne = belote « classique », 1re équipe à `NET.target` (1000). **Clés Supabase** (`window.BELOTRO_SB_URL` / `BELOTRO_SB_ANON`) injectées en tête de fichier (placeholders `__SUPABASE_URL__`/`__SUPABASE_ANON__`) ; lib `supabase-js` **vendorisée** dans `supabase.min.js` (même origine). Sans clés, le mode dégrade proprement (message « non configuré »), solo/hotseat intacts. Realtime doit être activé côté projet Supabase (broadcast/presence ne nécessitent aucune table).

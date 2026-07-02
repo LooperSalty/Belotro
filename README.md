@@ -6,7 +6,7 @@ Le tout tient dans **un seul fichier HTML autonome** — aucune dépendance de b
 
 ## ▶️ Jouer
 
-Ouvre simplement `Belotro.html` dans un navigateur, ou joue en ligne sur le déploiement Vercel.
+Ouvre simplement `index.html` dans un navigateur, ou joue en ligne sur le déploiement Vercel.
 
 ## 🎮 Modes
 
