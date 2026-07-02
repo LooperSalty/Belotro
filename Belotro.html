@@ -197,6 +197,7 @@ h1,h2,h3,.dfont{font-family:'Baloo 2',sans-serif;}
       <div class="opt-row" id="modeRow">
         <div class="opt active" data-mode="solo">Solo — 1 joueur vs 3 IA</div>
         <div class="opt" data-mode="hotseat">Entre potes — pass-and-play (2 à 4 joueurs)</div>
+        <div class="opt" data-mode="online">En ligne — multi gratuit</div>
       </div>
       <div id="humanCountRow" class="opt-row hidden">
         <div class="opt" data-n="2">2 joueurs (équipes mixtes IA)</div>
@@ -206,7 +207,7 @@ h1,h2,h3,.dfont{font-family:'Baloo 2',sans-serif;}
       <div class="small-note">En pass-and-play, un rideau s'affiche à chaque changement de main : passe l'appareil à ton pote sans regarder ! Tout se joue sur le même écran, comme une vraie belote de comptoir.</div>
     </div>
 
-    <div class="menu-panel">
+    <div class="menu-panel" id="soloConfig">
       <h3>② Longueur du run</h3>
       <div class="opt-row" id="targetRow">
         <div class="opt" data-t="3">Courte — 3 Antes</div>
@@ -216,7 +217,21 @@ h1,h2,h3,.dfont{font-family:'Baloo 2',sans-serif;}
       <div class="small-note">Chaque Ante = 3 blindes (Petite, Grande, Boss). Franchis la blinde Boss du dernier Ante pour gagner le run. Chaque blinde impose un score à atteindre en un nombre de manches limité.</div>
     </div>
 
-    <button class="btn" onclick="startRun()" style="font-size:19px;padding:14px 34px;">▶ Lancer le run</button>
+    <div class="menu-panel hidden" id="onlinePanel">
+      <h3>② Salon en ligne</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
+        <input id="onlineName" placeholder="Ton pseudo" maxlength="14" style="flex:1;min-width:140px;padding:9px 12px;border-radius:10px;border:2px solid rgba(255,255,255,.2);background:rgba(0,0,0,.25);color:var(--cream);font-family:'Baloo 2';font-size:14px;">
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <button class="btn small" onclick="netCreateRoom()">➕ Créer un salon</button>
+        <span style="opacity:.6;">ou</span>
+        <input id="joinCode" placeholder="CODE" maxlength="5" style="width:96px;text-transform:uppercase;letter-spacing:2px;text-align:center;padding:9px 8px;border-radius:10px;border:2px solid rgba(255,255,255,.2);background:rgba(0,0,0,.25);color:var(--gold);font-family:'Baloo 2';font-weight:700;font-size:16px;">
+        <button class="btn small secondary" onclick="netJoinRoom()">Rejoindre ▶</button>
+      </div>
+      <div class="small-note" id="onlineStatus">Belote « classique » en ligne : 2 à 4 amis sur des appareils différents, sièges vides complétés par l'IA. Première équipe à 1000 points. (La couche roguelike reste en solo.)</div>
+    </div>
+
+    <button class="btn" id="startRunBtn" onclick="startRun()" style="font-size:19px;padding:14px 34px;">▶ Lancer le run</button>
     <div class="small-note" style="margin-top:10px;max-width:560px;text-align:center;">Règles : atout / tout atout / sans atout, coinche &amp; surcoinche, belote-rebelote, dix de der, contrats jusqu'à 160 puis <b>Capot</b> puis <b>Générale</b> — plus des Jokers thématiques à débloquer.</div>
   </div>
 
@@ -264,6 +279,14 @@ h1,h2,h3,.dfont{font-family:'Baloo 2',sans-serif;}
   <div id="overlayRoot"></div>
 
 </div>
+
+<!-- Multijoueur en ligne : Supabase Realtime (lib vendorisée localement, même origine) -->
+<script src="supabase.min.js"></script>
+<script>
+/* Config Supabase — remplacée à l'injection des clés (ou surchargeable via localStorage). */
+window.BELOTRO_SB_URL  = window.BELOTRO_SB_URL  || "__SUPABASE_URL__";
+window.BELOTRO_SB_ANON = window.BELOTRO_SB_ANON || "__SUPABASE_ANON__";
+</script>
 
 <script>
 /* =========================================================================
@@ -457,7 +480,11 @@ document.getElementById('modeRow').addEventListener('click', e=>{
   document.querySelectorAll('#modeRow .opt').forEach(o=>o.classList.remove('active'));
   opt.classList.add('active');
   uiState.mode = opt.dataset.mode;
+  const online = uiState.mode==='online';
   document.getElementById('humanCountRow').classList.toggle('hidden', uiState.mode!=='hotseat');
+  document.getElementById('soloConfig').classList.toggle('hidden', online);
+  document.getElementById('onlinePanel').classList.toggle('hidden', !online);
+  document.getElementById('startRunBtn').classList.toggle('hidden', online);
 });
 document.getElementById('humanCountRow').addEventListener('click', e=>{
   const opt = e.target.closest('.opt'); if(!opt) return;
@@ -506,6 +533,7 @@ function startRun(){
 /* --------------------------- déroulement d'une manche --------------------------- */
 function startHand(){
   sfx('deal');
+  S.awaiting = null;
   const deck = shuffle(buildDeck());
   S.hands = [[],[],[],[]];
   for(let i=0;i<8;i++) for(let p=0;p<4;p++) S.hands[p].push(deck[i*4+p]);
@@ -694,9 +722,15 @@ function submitBid(){
   const b = window._pendingBid;
   const type = (b.suit==='sans-atout'||b.suit==='tout-atout') ? b.suit : 'atout';
   const suit = type==='atout' ? b.suit : null;
-  applyBid(S.bidding.turn, {mode:b.mode, type, suit, value:b.value});
+  const bid = {mode:b.mode, type, suit, value:b.value};
+  if(NET.role==='guest'){ netSend('act', {t:'bid', seat:NET.mySeat, bid}); guestWaitBar(); return; }
+  applyBid(S.bidding.turn, bid);
 }
-function submitPass(){ applyPass(S.bidding.turn); }
+function submitPass(){
+  if(NET.role==='guest'){ netSend('act', {t:'pass', seat:NET.mySeat}); guestWaitBar(); return; }
+  applyPass(S.bidding.turn);
+}
+function guestWaitBar(){ NET.lastUIKey='sent'; document.getElementById('actionBar').innerHTML = `<div style="text-align:center;opacity:.7;" class="dfont">Envoyé — en attente…</div>`; }
 
 function applyBid(seat, bid){
   const entry = {player:seat, team:TEAM_OF[seat], mode:bid.mode, type:bid.type, suit:bid.suit, value:bid.value};
@@ -741,8 +775,12 @@ function finalizeContract(){
   render();
   const defenders = [0,1,2,3].filter(s=>TEAM_OF[s]!==S.declarerTeam);
   const humanDefender = defenders.find(s=>S.playerTypes[s]==='human');
+  const remoteDefender = defenders.find(s=>S.playerTypes[s]==='remote');
   if(humanDefender!==undefined){
     showCurtainIfNeeded(humanDefender, ()=>showCoincheChoice(humanDefender, 'coinche'));
+  } else if(remoteDefender!==undefined){
+    S.awaiting = {seat:remoteDefender, kind:'coinche'};
+    render();
   } else {
     const anyCoinche = defenders.some(s=>aiCoincheDecision(s));
     if(anyCoinche){ applyCoinche(); }
@@ -764,6 +802,7 @@ function showCoincheChoice(seat, kind){
   document.getElementById('actionBar').innerHTML = html;
 }
 function humanCoincheChoice(seat, yes, kind){
+  if(NET.role==='guest'){ netSend('act', {t:'coinche', seat:NET.mySeat, yes, kind}); guestWaitBar(); return; }
   if(kind==='coinche'){
     if(yes){ applyCoinche(); } else { startPlay(); }
   } else {
@@ -776,9 +815,13 @@ function applyCoinche(){
   log(`📣 COINCHE ! Le contrat vaut désormais le double.`, true);
   const declarers = [0,1,2,3].filter(s=>TEAM_OF[s]===S.declarerTeam);
   const humanDeclarer = declarers.find(s=>S.playerTypes[s]==='human');
+  const remoteDeclarer = declarers.find(s=>S.playerTypes[s]==='remote');
   render();
   if(humanDeclarer!==undefined){
     showCurtainIfNeeded(humanDeclarer, ()=>showCoincheChoice(humanDeclarer, 'surcoinche'));
+  } else if(remoteDeclarer!==undefined){
+    S.awaiting = {seat:remoteDeclarer, kind:'surcoinche'};
+    render();
   } else {
     const surcoinche = declarers.some(s=>Math.random()<0.18);
     if(surcoinche) applySurcoinche(); else startPlay();
@@ -800,6 +843,7 @@ function screenShake(){
 /* --------------------------- JEU DE LA CARTE --------------------------- */
 function startPlay(){
   S.phase='play';
+  S.awaiting = null;
   S.trick = {cardsPlayed:[], leader:(S.dealerIndex+1)%4};
   render();
   continuePlay();
@@ -853,11 +897,16 @@ function currentTrickWinner(){
 }
 
 function continuePlay(){
+  if(S.online) S.awaiting = null;
   render();
   const seat = playerToAct();
   if(seat===null) return;
-  if(S.playerTypes[seat]==='human'){
+  const pt = S.playerTypes[seat];
+  if(pt==='human'){
     showCurtainIfNeeded(seat, ()=>{ renderHandInteractive(seat); });
+  } else if(pt==='remote'){
+    S.awaiting = {seat, kind:'play'};
+    render();
   } else {
     setTimeout(()=>{ aiPlay(seat); }, 550);
   }
@@ -1036,7 +1085,7 @@ function finishHandScoring(){
   S.handSummary = {contract, raw:raw.slice(), success, scoreA, scoreB, jGain, beloteTeam, mult, mode};
   sfx(scoreA>=scoreB ? 'trick' : 'pass');
   render();
-  showScoringOverlay();
+  if(S.online){ onlineShowScore(); } else { showScoringOverlay(); }
 }
 
 /* --------------------------- OVERLAYS --------------------------- */
@@ -1072,6 +1121,7 @@ function showScoringOverlay(){
 
 function afterScoring(){
   clearOv();
+  if(S.online){ S.netOverlay=null; onlineAfterHand(); return; }
   S.blindProgress += S.lastScoreA;
   S.handsLeft--;
   render();
@@ -1204,6 +1254,7 @@ function backToMenu(){
 
 /* --------------------------- CURTAIN (hotseat) --------------------------- */
 function showCurtainIfNeeded(seat, cb){
+  if(S.online){ cb(); return; }
   if(S.playerTypes[seat]!=='human'){ cb(); return; }
   if(uiState.mode==='solo'){ cb(); return; }
   if(S.lastActingHuman===seat){ cb(); return; }
@@ -1220,10 +1271,15 @@ function revealCurtain(seat){
   window._curtainCb && window._curtainCb();
 }
 function maybeCurtainThenContinue(seat, phaseKind){
-  if(S.playerTypes[seat]==='human'){
+  if(S.online) S.awaiting = null;
+  const pt = S.playerTypes[seat];
+  if(pt==='human'){
     showCurtainIfNeeded(seat, ()=>{
       if(phaseKind==='bidding') humanBidUI(seat);
     });
+  } else if(pt==='remote'){
+    S.awaiting = {seat, kind:'bid'};
+    render();
   } else {
     setTimeout(()=>aiActBidding(seat), 650);
   }
@@ -1238,17 +1294,28 @@ function aiActBidding(seat){
 function render(){
   if(!S) return;
 
-  const reached = S.blindProgress>=S.blindReq;
-  document.getElementById('topGrp').innerHTML = `
-    <div class="pill">Ante <b>${S.ante}</b>/${S.finalAnte}</div>
-    <div class="pill ${S.bossModifier?'boss':''}">${BLIND_NAMES[S.blindIndex]}${S.bossModifier?' ⚠':''}</div>
-    <div class="pill goal ${reached?'reached':''}">🎯 <b style="color:${reached?'var(--blue)':'var(--gold)'}">${S.blindProgress}</b> / ${S.blindReq}</div>
-    <div class="pill">Manches <b>${S.handsLeft}</b></div>
-    <div class="pill score-a">N-S <b>${S.teamScore[0]}</b></div>
-    <div class="pill score-b">E-O <b>${S.teamScore[1]}</b></div>
-    <div class="pill">🪙 <b>${S.jetons}</b></div>
-    <button class="btn small ${muted?'secondary':''}" onclick="toggleMute()" style="padding:5px 10px;">${muted?'🔇':'🔊'}</button>
-  `;
+  if(S.online){
+    document.getElementById('topGrp').innerHTML = `
+      <div class="pill">🌐 <b style="letter-spacing:2px;">${NET.code||''}</b></div>
+      <div class="pill score-a">Nord-Sud <b>${S.teamScore[0]}</b></div>
+      <div class="pill score-b">Est-Ouest <b>${S.teamScore[1]}</b></div>
+      <div class="pill goal">🎯 <b>${S.target}</b></div>
+      <div class="pill">Manche <b>${S.handNumber}</b></div>
+      <button class="btn small ${muted?'secondary':''}" onclick="toggleMute()" style="padding:5px 10px;">${muted?'🔇':'🔊'}</button>
+    `;
+  } else {
+    const reached = S.blindProgress>=S.blindReq;
+    document.getElementById('topGrp').innerHTML = `
+      <div class="pill">Ante <b>${S.ante}</b>/${S.finalAnte}</div>
+      <div class="pill ${S.bossModifier?'boss':''}">${BLIND_NAMES[S.blindIndex]}${S.bossModifier?' ⚠':''}</div>
+      <div class="pill goal ${reached?'reached':''}">🎯 <b style="color:${reached?'var(--blue)':'var(--gold)'}">${S.blindProgress}</b> / ${S.blindReq}</div>
+      <div class="pill">Manches <b>${S.handsLeft}</b></div>
+      <div class="pill score-a">N-S <b>${S.teamScore[0]}</b></div>
+      <div class="pill score-b">E-O <b>${S.teamScore[1]}</b></div>
+      <div class="pill">🪙 <b>${S.jetons}</b></div>
+      <button class="btn small ${muted?'secondary':''}" onclick="toggleMute()" style="padding:5px 10px;">${muted?'🔇':'🔊'}</button>
+    `;
+  }
 
   document.getElementById('jokersStrip').innerHTML = S.jokers.map(id=>{
     const j = JOKER_POOL.find(x=>x.id===id);
@@ -1278,17 +1345,21 @@ function render(){
 
   renderSouthHand();
 
-  if(S.phase==='bidding' && S.playerTypes[S.bidding.turn]==='ai'){
-    if(!document.getElementById('confirmBidBtn')) document.getElementById('actionBar').innerHTML = `<div style="text-align:center;opacity:.7;" class="dfont">Réflexion de ${S.names[S.bidding.turn]}…</div>`;
-  }
-  if(S.phase==='play'){
-    const act = playerToAct();
-    if(act!==null){
-      const ab = document.getElementById('actionBar');
-      if(S.playerTypes[act]==='human') ab.innerHTML = `<div style="text-align:center;" class="dfont">🃏 ${S.names[act]}, à toi de jouer — choisis une carte.</div>`;
-      else ab.innerHTML = `<div style="text-align:center;opacity:.7;" class="dfont">${S.names[act]} joue…</div>`;
+  if(NET.role!=='guest'){
+    if(S.phase==='bidding' && S.playerTypes[S.bidding.turn]!=='human'){
+      if(!document.getElementById('confirmBidBtn')) document.getElementById('actionBar').innerHTML = `<div style="text-align:center;opacity:.7;" class="dfont">${S.playerTypes[S.bidding.turn]==='remote'?'En attente de '+S.names[S.bidding.turn]+'…':'Réflexion de '+S.names[S.bidding.turn]+'…'}</div>`;
+    }
+    if(S.phase==='play'){
+      const act = playerToAct();
+      if(act!==null){
+        const ab = document.getElementById('actionBar');
+        if(S.playerTypes[act]==='human') ab.innerHTML = `<div style="text-align:center;" class="dfont">🃏 ${S.names[act]}, à toi de jouer — choisis une carte.</div>`;
+        else ab.innerHTML = `<div style="text-align:center;opacity:.7;" class="dfont">${S.names[act]}${S.playerTypes[act]==='remote'?'' : ''} joue…</div>`;
+      }
     }
   }
+
+  if(NET.role==='host' && S.online) netBroadcastSync();
 }
 function cardHTML(card, contract, interactive, idx){
   const red = RED_SUITS.includes(card.suit);
@@ -1300,6 +1371,7 @@ function cardHTML(card, contract, interactive, idx){
   </div>`;
 }
 function renderSouthHand(){
+  if(NET.role==='guest'){ renderGuestHand(); return; }
   let seatToShow = null;
   if(S.phase==='bidding') seatToShow = S.bidding.turn;
   else if(S.phase==='play') seatToShow = playerToAct();
@@ -1331,13 +1403,304 @@ function renderSouthHand(){
   }
 }
 function onPlayCard(i){
-  const seat = playerToAct();
   const card = window._sortedHandRef[i];
+  if(NET.role==='guest'){
+    const seat = NET.mySeat;
+    const legal = legalMoves(seat);
+    if(!legal.some(l=>l.suit===card.suit&&l.rank===card.rank)) return;
+    netSend('act', {t:'play', seat, card});
+    NET.lastUIKey='sent';
+    document.getElementById('actionBar').innerHTML = `<div style="text-align:center;opacity:.7;" class="dfont">Carte envoyée…</div>`;
+    return;
+  }
+  const seat = playerToAct();
   const legal = legalMoves(seat);
   if(!legal.some(l=>l.suit===card.suit&&l.rank===card.rank)) return;
   playCard(seat, card);
 }
 function renderHandInteractive(seat){ render(); }
+
+/* =========================================================================
+   MULTIJOUEUR EN LIGNE — Supabase Realtime, modèle host-authoritative.
+   L'hôte fait tourner le moteur et diffuse des vues expurgées ; les invités
+   sont des terminaux qui affichent la vue et renvoient leurs intentions.
+   ========================================================================= */
+let NET = {role:'local', sb:null, channel:null, code:'', clientId:'', name:'', players:[], seatByClient:{}, mySeat:0, target:1000, lastUIKey:null};
+let GV = null;
+
+function sbClient(){
+  if(NET.sb) return NET.sb;
+  const url = window.BELOTRO_SB_URL, anon = window.BELOTRO_SB_ANON;
+  if(!url || url.indexOf('__')===0 || !anon || anon.indexOf('__')===0) return null;
+  if(!window.supabase || !window.supabase.createClient) return null;
+  NET.sb = window.supabase.createClient(url, anon, {realtime:{params:{eventsPerSecond:30}}});
+  return NET.sb;
+}
+function randCode(){ const a='ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let s=''; for(let i=0;i<4;i++) s+=a[Math.floor(Math.random()*a.length)]; return s; }
+function newClientId(){ return 'c'+Math.random().toString(36).slice(2,10); }
+function onlineStatusMsg(m){ const el=document.getElementById('onlineStatus'); if(el) el.innerHTML=m; }
+function netSend(event, payload){ if(NET.channel) NET.channel.send({type:'broadcast', event, payload}); }
+
+function netCreateRoom(){
+  if(!sbClient()){ onlineStatusMsg("⚠ Multijoueur non configuré (clés Supabase absentes). Le solo et le pass-and-play fonctionnent."); return; }
+  NET.name = (document.getElementById('onlineName').value||'Hôte').trim().slice(0,14) || 'Hôte';
+  NET.clientId = newClientId();
+  NET.code = randCode();
+  NET.role = 'host';
+  NET.players = [{id:NET.clientId, name:NET.name}];
+  joinChannel(true);
+}
+function netJoinRoom(){
+  if(!sbClient()){ onlineStatusMsg("⚠ Multijoueur non configuré (clés Supabase absentes)."); return; }
+  const code = (document.getElementById('joinCode').value||'').toUpperCase().trim();
+  if(code.length<4){ onlineStatusMsg("Entre un code de salon valide."); return; }
+  NET.name = (document.getElementById('onlineName').value||'Invité').trim().slice(0,14) || 'Invité';
+  NET.clientId = newClientId();
+  NET.code = code;
+  NET.role = 'guest';
+  joinChannel(false);
+}
+function joinChannel(isHost){
+  const sb = sbClient();
+  const ch = sb.channel('belotro-'+NET.code, {config:{presence:{key:NET.clientId}, broadcast:{self:false}}});
+  NET.channel = ch;
+  ch.on('broadcast', {event:'lobby'}, ({payload})=>onLobby(payload));
+  ch.on('broadcast', {event:'begin'}, ({payload})=>onBegin(payload));
+  ch.on('broadcast', {event:'sync'},  ({payload})=>onSync(payload));
+  ch.on('broadcast', {event:'act'},   ({payload})=>{ if(NET.role==='host') onHostAction(payload); });
+  ch.on('presence', {event:'sync'},  ()=>onPresence());
+  ch.on('presence', {event:'join'},  ()=>onPresence());
+  ch.on('presence', {event:'leave'}, ()=>onPresence());
+  onlineStatusMsg('Connexion au salon <b>'+NET.code+'</b>…');
+  ch.subscribe(async status=>{
+    if(status==='SUBSCRIBED'){
+      await ch.track({id:NET.clientId, name:NET.name, host:isHost});
+      if(isHost){ showLobby(); broadcastLobby(); }
+    } else if(status==='CHANNEL_ERROR' || status==='TIMED_OUT'){
+      onlineStatusMsg('⚠ Connexion impossible. Vérifie le code et la configuration Supabase.');
+    }
+  });
+}
+function onPresence(){
+  if(NET.role!=='host' || S) return; // seating figé une fois la partie lancée
+  const state = NET.channel.presenceState();
+  const present = {};
+  for(const k in state){ const m=state[k][0]; present[k]={id:k, name:(m&&m.name)||'Joueur'}; }
+  NET.players = NET.players.filter(p=>present[p.id]);
+  for(const k in present){ if(!NET.players.find(p=>p.id===k)) NET.players.push(present[k]); }
+  NET.players.sort((a,b)=> (a.id===NET.clientId?-1 : b.id===NET.clientId?1 : 0));
+  if(NET.players.length>4) NET.players = NET.players.slice(0,4);
+  broadcastLobby(); showLobby();
+}
+function broadcastLobby(){ netSend('lobby', {code:NET.code, players:NET.players}); }
+function onLobby(p){ if(NET.role==='host') return; NET.code=p.code; NET.players=p.players; showLobby(); }
+
+function showLobby(){
+  if(S) return;
+  const isHost = NET.role==='host';
+  const rows = NET.players.map((pl,i)=>`<div class="score-line"><span>Siège ${i} · ${TEAM_OF[i]===0?'N-S':'E-O'}</span><b>${pl.name}${pl.id===NET.clientId?' (toi)':''}${i===0?' 👑':''}</b></div>`).join('');
+  let empties='';
+  for(let i=NET.players.length;i<4;i++) empties+=`<div class="score-line" style="opacity:.55;"><span>Siège ${i} · ${TEAM_OF[i]===0?'N-S':'E-O'}</span><b>IA</b></div>`;
+  ov(`<div class="overlay-card">
+    <h2>🌐 Salon <span style="letter-spacing:3px;">${NET.code}</span></h2>
+    <div style="font-size:13px;opacity:.85;margin-bottom:8px;">Partage ce code. Sièges vides = IA. Équipes : Nord-Sud (0,2) vs Est-Ouest (1,3). Première équipe à ${NET.target} pts.</div>
+    ${rows}${empties}
+    <div class="btn-row" style="margin-top:14px;">
+      ${isHost? `<button class="btn" onclick="netStartGame()">Démarrer ▶</button>` : `<div class="dfont" style="opacity:.85;">En attente de l'hôte…</div>`}
+      <button class="btn secondary small" onclick="netLeave()">Quitter</button>
+    </div>
+  </div>`);
+}
+function netLeave(){
+  try{ NET.channel && NET.channel.unsubscribe(); }catch(e){}
+  const sb = NET.sb;
+  NET = {role:'local', sb, players:[], seatByClient:{}, target:1000, lastUIKey:null};
+  S = null; clearOv();
+}
+function netStartGame(){
+  if(NET.role!=='host') return;
+  const seatByClient = {}; NET.players.forEach((pl,i)=> seatByClient[pl.id]=i);
+  NET.seatByClient = seatByClient;
+  const names = ['Toi','Ouest','Nord','Est'];
+  const playerTypes = ['ai','ai','ai','ai'];
+  for(const pl of NET.players){ const seat=seatByClient[pl.id]; names[seat]=pl.name; playerTypes[seat]=(pl.id===NET.clientId)?'human':'remote'; }
+  const begin = {seatByClient, names, playerTypes, target:NET.target};
+  netSend('begin', begin);
+  startOnlineGame(begin, true);
+}
+function onBegin(begin){
+  if(NET.role==='host') return;
+  NET.seatByClient = begin.seatByClient;
+  startOnlineGame(begin, false);
+}
+function startOnlineGame(begin, isHost){
+  NET.mySeat = begin.seatByClient[NET.clientId];
+  clearOv();
+  document.getElementById('menu').classList.add('hidden');
+  document.getElementById('table').classList.remove('hidden');
+  uiState.mode='online';
+  if(isHost){
+    S = {
+      online:true, target:begin.target,
+      playerTypes:begin.playerTypes, names:begin.names,
+      teamScore:[0,0], jetons:0, jokers:[], handNumber:1, dealerIndex:0,
+      lastActingHuman:-1, logs:[], bossModifier:null, ante:1, blindIndex:0,
+      lastScoreA:0, awaiting:null, netOverlay:null,
+    };
+    log('🌐 Partie en ligne — salon '+NET.code+'.', true);
+    startHand();
+  } else {
+    S = null;
+    document.getElementById('actionBar').innerHTML = `<div style="text-align:center;opacity:.85;" class="dfont">En attente de l'hôte…</div>`;
+  }
+}
+
+/* ---- Hôte : diffusion de la vue ---- */
+function netView(){
+  const hands = {};
+  for(const id in NET.seatByClient){ hands[id] = S.hands[NET.seatByClient[id]]; }
+  return {
+    pub:{
+      online:true, phase:S.phase, names:S.names, playerTypes:S.playerTypes,
+      teamScore:S.teamScore, target:S.target, dealerIndex:S.dealerIndex, handNumber:S.handNumber,
+      contract:S.contract, declarerTeam:S.declarerTeam,
+      bidding:S.bidding?{turn:S.bidding.turn, highestBid:S.bidding.highestBid}:null,
+      trick:{cardsPlayed:S.trick.cardsPlayed, leader:S.trick.leader},
+      handCounts:S.hands.map(h=>h.length),
+      logs:S.logs.slice(0,14),
+      awaiting:S.awaiting||null, overlay:S.netOverlay||null, code:NET.code,
+    },
+    hands,
+  };
+}
+function netBroadcastSync(){ netSend('sync', netView()); }
+
+/* ---- Invité : réception et rendu ---- */
+function onSync(payload){ if(NET.role!=='guest') return; GV=payload; applyGuestView(payload); }
+function applyGuestView(p){
+  const pub = p.pub, mySeat = NET.mySeat;
+  const myHand = (p.hands && p.hands[NET.clientId]) ? p.hands[NET.clientId] : [];
+  const hands = [];
+  for(let s=0;s<4;s++) hands[s] = (s===mySeat) ? myHand : Array(pub.handCounts[s]||0).fill({suit:'',rank:''});
+  S = {
+    online:true, phase:pub.phase, names:pub.names, playerTypes:pub.playerTypes,
+    teamScore:pub.teamScore, target:pub.target, dealerIndex:pub.dealerIndex, handNumber:pub.handNumber,
+    contract:pub.contract, declarerTeam:pub.declarerTeam,
+    bidding:pub.bidding?{turn:pub.bidding.turn, highestBid:pub.bidding.highestBid}:null,
+    trick:pub.trick, hands, logs:pub.logs, jokers:[], bossModifier:null,
+    ante:1, blindIndex:0, awaiting:pub.awaiting, netOverlay:pub.overlay,
+  };
+  render();
+  if(pub.overlay){ renderGuestOverlay(pub.overlay); } else { clearOv(); }
+  // barre d'action / contrôles de l'invité
+  const ab = document.getElementById('actionBar');
+  const mine = pub.awaiting && pub.awaiting.seat===mySeat;
+  if(mine){
+    const k = pub.awaiting.kind;
+    const key = pub.phase+'|'+pub.awaiting.seat+k+'|'+(pub.bidding&&pub.bidding.highestBid?bidRank(pub.bidding.highestBid):'');
+    if(k==='bid'){ if(NET.lastUIKey!==key){ humanBidUI(mySeat); NET.lastUIKey=key; } }
+    else if(k==='coinche'){ if(NET.lastUIKey!==key){ showCoincheChoice(mySeat,'coinche'); NET.lastUIKey=key; } }
+    else if(k==='surcoinche'){ if(NET.lastUIKey!==key){ showCoincheChoice(mySeat,'surcoinche'); NET.lastUIKey=key; } }
+    else if(k==='play'){ NET.lastUIKey=null; ab.innerHTML = `<div style="text-align:center;" class="dfont">🃏 À toi de jouer — choisis une carte.</div>`; }
+  } else {
+    NET.lastUIKey=null;
+    const who = pub.awaiting ? pub.names[pub.awaiting.seat] : (pub.phase==='bidding'&&pub.bidding? pub.names[pub.bidding.turn] : (pub.phase==='play'? pub.names[playerToAct()] : ''));
+    ab.innerHTML = `<div style="text-align:center;opacity:.7;" class="dfont">${who? 'En attente de '+who+'…' : '…'}</div>`;
+  }
+}
+function renderGuestOverlay(o){
+  if(o.type==='score') ov(onlineScoreHTML(o.h, true));
+  else if(o.type==='over') ov(onlineOverHTML(o, true));
+}
+
+/* ---- Hôte : réception des intentions ---- */
+function onHostAction(msg){
+  if(NET.role!=='host' || !S) return;
+  const seat = msg.seat; if(seat===undefined || seat===null) return;
+  if(msg.t==='bid' || msg.t==='pass'){
+    if(S.phase!=='bidding' || S.bidding.turn!==seat) return;
+    S.awaiting=null;
+    if(msg.t==='bid') applyBid(seat, msg.bid); else applyPass(seat);
+    return;
+  }
+  if(msg.t==='coinche'){
+    if(!S.awaiting || S.awaiting.seat!==seat) return;
+    const kind=S.awaiting.kind; S.awaiting=null;
+    if(kind==='coinche'){ if(msg.yes) applyCoinche(); else startPlay(); }
+    else { if(msg.yes) applySurcoinche(); else startPlay(); }
+    return;
+  }
+  if(msg.t==='play'){
+    if(S.phase!=='play' || playerToAct()!==seat) return;
+    const legal=legalMoves(seat);
+    if(!legal.some(l=>l.suit===msg.card.suit && l.rank===msg.card.rank)) return;
+    S.awaiting=null; playCard(seat, msg.card);
+    return;
+  }
+}
+
+/* ---- Overlays en ligne (score / fin) ---- */
+function onlineScoreHTML(h, guest){
+  const c=h.contract;
+  const banner = h.success ? (c.mode==='generale'?'GÉNÉRALE RÉUSSIE !':c.mode==='capot'?'CAPOT RÉUSSI !':'Contrat tenu !') : 'Chute !';
+  const co = c.coincheLevel===1?' (×2)':c.coincheLevel===2?' (×4)':'';
+  return `<div class="overlay-card">
+    <h2>Résultat de la manche</h2>
+    <div class="result-banner ${h.success?'win':'lose'}">${banner}</div>
+    <div class="score-line"><span>Contrat</span><b>${bidText(c)}${co}</b></div>
+    <div class="score-line"><span>Nord-Sud marque</span><b style="color:var(--blue)">+${h.scoreA}</b></div>
+    <div class="score-line"><span>Est-Ouest marque</span><b style="color:var(--red)">+${h.scoreB}</b></div>
+    <div class="score-line"><span>Score total</span><b>${S.teamScore[0]} — ${S.teamScore[1]} (obj. ${S.target})</b></div>
+    <div class="btn-row" style="margin-top:14px;">${guest? `<div class="dfont" style="opacity:.85;">En attente de l'hôte…</div>` : `<button class="btn" onclick="afterScoring()">Continuer ▶</button>`}</div>
+  </div>`;
+}
+function onlineShowScore(){ S.netOverlay={type:'score', h:S.handSummary}; render(); ov(onlineScoreHTML(S.handSummary, false)); }
+function onlineOverHTML(o, guest){
+  return `<div class="overlay-card">
+    <h2>${o.win? '🏆 Nord-Sud gagne !' : '🏁 Est-Ouest gagne !'}</h2>
+    <div class="score-line"><span>Score final Nord-Sud</span><b style="color:var(--blue)">${o.scores[0]}</b></div>
+    <div class="score-line"><span>Score final Est-Ouest</span><b style="color:var(--red)">${o.scores[1]}</b></div>
+    <div class="btn-row" style="margin-top:14px;">${guest? `<div class="dfont" style="opacity:.85;">Partie terminée.</div>` : `<button class="btn" onclick="netEndToMenu()">Retour au menu</button>`}<button class="btn secondary small" onclick="netEndToMenu()">Quitter</button></div>
+  </div>`;
+}
+function onlineAfterHand(){
+  if(S.teamScore[0]>=S.target || S.teamScore[1]>=S.target){
+    const win = S.teamScore[0]>=S.target && S.teamScore[0]>=S.teamScore[1];
+    S.netOverlay = {type:'over', win, scores:S.teamScore.slice()};
+    sfx(win?'victory':'lose'); render();
+    ov(onlineOverHTML(S.netOverlay, false));
+    return;
+  }
+  S.dealerIndex=(S.dealerIndex+1)%4; S.handNumber++;
+  startHand();
+}
+function netEndToMenu(){
+  try{ NET.channel && NET.channel.unsubscribe(); }catch(e){}
+  const sb=NET.sb;
+  NET={role:'local', sb, players:[], seatByClient:{}, target:1000, lastUIKey:null};
+  S=null; clearOv();
+  document.getElementById('table').classList.add('hidden');
+  document.getElementById('menu').classList.remove('hidden');
+}
+function renderGuestHand(){
+  const mySeat=NET.mySeat;
+  const container=document.getElementById('handRow');
+  const contract = S.phase==='bidding' ? null : S.contract;
+  const sorted = sortHandForDisplay(S.hands[mySeat]||[], contract);
+  window._sortedHandRef = sorted;
+  const myPlay = (S.phase==='play' && S.awaiting && S.awaiting.seat===mySeat && S.awaiting.kind==='play');
+  if(myPlay){
+    const legal = legalMoves(mySeat);
+    container.innerHTML = sorted.map((c,i)=>{
+      const isLegal = legal.some(l=>l.suit===c.suit&&l.rank===c.rank);
+      const red=RED_SUITS.includes(c.suit); const trump=contract&&isTrumpCard(c,contract);
+      return `<div class="card ${red?'red':'black'} ${trump?'trump-card':''} ${isLegal?'playable':'disabled'}" onclick="${isLegal?`onPlayCard(${i})`:''}">
+        <div class="rank-top">${c.rank}</div><div class="suit-mid">${c.suit}</div><div class="rank-bot">${c.rank}</div></div>`;
+    }).join('');
+  } else {
+    container.innerHTML = sorted.map(c=>cardHTML(c, contract, false)).join('');
+  }
+}
 
 </script>
 </body>
