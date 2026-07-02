@@ -1464,6 +1464,7 @@ function joinChannel(isHost){
   const sb = sbClient();
   const ch = sb.channel('belotro-'+NET.code, {config:{presence:{key:NET.clientId}, broadcast:{self:false}}});
   NET.channel = ch;
+  ch.on('broadcast', {event:'hello'}, ({payload})=>onHello(payload));
   ch.on('broadcast', {event:'lobby'}, ({payload})=>onLobby(payload));
   ch.on('broadcast', {event:'begin'}, ({payload})=>onBegin(payload));
   ch.on('broadcast', {event:'sync'},  ({payload})=>onSync(payload));
@@ -1474,12 +1475,25 @@ function joinChannel(isHost){
   onlineStatusMsg('Connexion au salon <b>'+NET.code+'</b>…');
   ch.subscribe(async status=>{
     if(status==='SUBSCRIBED'){
-      await ch.track({id:NET.clientId, name:NET.name, host:isHost});
+      try{ await ch.track({id:NET.clientId, name:NET.name, host:isHost}); }catch(e){}
       if(isHost){ showLobby(); broadcastLobby(); }
+      else {
+        // handshake fiable par broadcast (la présence Supabase peut ne pas être active)
+        const hello = ()=> netSend('hello', {id:NET.clientId, name:NET.name});
+        hello(); setTimeout(hello, 500); setTimeout(hello, 1500);
+      }
     } else if(status==='CHANNEL_ERROR' || status==='TIMED_OUT'){
       onlineStatusMsg('⚠ Connexion impossible. Vérifie le code et la configuration Supabase.');
     }
   });
+}
+function onHello(p){
+  if(NET.role!=='host' || S) return; // salon figé une fois la partie lancée
+  if(!NET.players.find(x=>x.id===p.id)){
+    if(NET.players.length<4) NET.players.push({id:p.id, name:p.name});
+  }
+  broadcastLobby();
+  showLobby();
 }
 function onPresence(){
   if(NET.role!=='host' || S) return; // seating figé une fois la partie lancée
