@@ -1,0 +1,11 @@
+# Vercel
+.vercel
+
+# Dépendances / outils
+node_modules/
+.DS_Store
+Thumbs.db
+
+# Fichiers locaux d'environnement
+.env
+.env.local
